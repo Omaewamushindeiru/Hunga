@@ -11,12 +11,13 @@ contract Jungle is Ownable {
     event HungaDiscovered(address indexed owner, uint tokenId);
     event HungaDeleted(address indexed owner, uint tokenId);
     event HungaTransfered(address indexed from, address indexed to, uint tokenId);
+    event HungaFed(address indexed owner, uint tokenId);
 
     event AuctionCreated(address indexed seller, uint tokenId);
     event AuctionClaimed(address indexed claimer, uint tokenId);
     event NewBid(address indexed bidder, uint tokenId, uint price);
 
-    enum Rank {God, Legendary, Duke, Knight, Lame}
+    enum Rank {Lame, Knight, Duke, Legendary}
     enum HungaType {Solar, Lunar, Radioactive, Disco}
 
     mapping (uint => address) private _hungaToOwner;
@@ -30,8 +31,6 @@ contract Jungle is Ownable {
     ERC721 private _erc721;
     ERC20 private _erc20;
 
-    uint256 hungaValue;
-
     uint nonce;
 
     struct Hunga {
@@ -43,12 +42,24 @@ contract Jungle is Ownable {
         uint risk;
         uint reward;
 
-        uint life;
         uint claimCount;
-        uint lastClaimed;
+        uint lastClaimed; // time at which owner last claimed
 
-        uint feedToImprove;
+        uint feedToImprove; // number of hungas needed to improve hunga
+        uint lastFed; // time at which owner last fed hunga
     }
+
+    struct HungaTrap {
+        uint id;
+
+        uint price;
+
+        uint LameRate;
+        uint KnightRate;
+        uint DukeRate;
+    }
+
+    mapping (uint => HungaTrap) private _hungaTraps; //packs
 
     struct Auction {
         address seller;
@@ -74,6 +85,13 @@ contract Jungle is Ownable {
         return _hungaToOwner[id];
     }
 
+    modifier onlyOwnerOfhunga(uint id) {
+        require(msg.sender == _hungaToOwner[id], "Not hunga owner");
+        _;
+    }
+
+
+
     function getAuctioned(uint id) public view returns (address seller, address lastBidder, uint startDate, uint priceToBid, uint bestOffer) {
         require(_auctionedhungas[id], "not auctioned");
         Auction memory auction = _auctions[id];
@@ -83,13 +101,6 @@ contract Jungle is Ownable {
     function isAuctioned(uint id) public view returns (bool) {
         return _auctionedhungas[id];
     }
-
-
-    modifier onlyOwnerOfhunga(uint id) {
-        require(msg.sender == _hungaToOwner[id], "Not hunga owner");
-        _;
-    }
-
 
     modifier onlyAuctionedhunga(uint id) {
         require(_auctionedhungas[id], "not auctioned hunga");
@@ -101,36 +112,38 @@ contract Jungle is Ownable {
 
 
     function PRNG() public returns(uint) {
-        nonce += 1;
+        nonce++;
         return uint(keccak256(abi.encodePacked(nonce, msg.sender, blockhash(block.number - 1))));
     }
 
-    function discoverRank(uint lameRate, uint knightRate, uint dukeRate, uint rng) internal returns (Rank){
+    function discoverRank(uint lameRate, uint knightRate, uint dukeRate, uint rng) internal pure returns (Rank){
         require(lameRate + knightRate + dukeRate < 100, "impossible rates");
         require(lameRate > 0 && knightRate > 0 && dukeRate > 0, "rates can't be 0");
+
         if(rng%100 >= lameRate) return Rank.Lame;
         if(rng%100 >= lameRate + knightRate) return Rank.Knight;
         if(rng%100 >= lameRate + knightRate + dukeRate) return Rank.Duke;
         else return Rank.Legendary;
     }
-    
-    function discoverReward(Rank rnk, uint rng) internal returns(uint){
-        int num = 5 - uint(rnk);
-        return (num - 1) * 10 + rng % (num * 10);
-    }
 
-    function discoverHunga() public returns (bool) {
-        require(_erc20.balanceOf(msg.sender) >= hungaValue, "not enough peels owned");
+    function discoverHunga(address to, uint hungaTrapId) public returns (bool) {
+        HungaTrap memory hg = _hungaTraps[hungaTrapId]; // gas ?
+
+        require(_erc20.balanceOf(msg.sender) >= hg.price, "not enough peels owned");
+
+        _erc20.transferFrom(msg.sender, _erc20.owner(), hg.price);
+
         _currentId++;
 
         uint rnd = PRNG();
-        Rank rnk = discoverRank(71, 23, 6, rnd);
-        HungaType hngtp = HungaType(nrd % 4);
+        Rank rnk = discoverRank(hg.LameRate, hg.KnightRate, hg.DukeRate, rnd);
+        HungaType hngtp = HungaType(rnd % 4);
 
-        uint reward = 90;
-        uint feed = (5-uint(rnk))*3;
+        uint reward = uint(rnk) * 10 + rnd % ((uint(rnk) + 1) * 10);
+        if(reward == 0) reward = 3;
+        uint feed = 3;
 
-        Hunga memory hunga = Hunga(_currentId, rnk, hngtp, 90, reward, 10, 0, now(), feed);
+        Hunga memory hunga = Hunga(_currentId, rnk, hngtp, 90, reward, 0, 0, feed, 0);
 
         _hungasOfOwner[msg.sender].push(hunga);
         _hungasById[_currentId] = hunga;
@@ -148,7 +161,7 @@ contract Jungle is Ownable {
     function _removeFromArray(address owner, uint id) private {
         uint size = _hungasOfOwner[owner].length;
         for (uint index = 0; index < size; index++) {
-            hunga storage hunga = _hungasOfOwner[owner][index];
+            Hunga storage hunga = _hungasOfOwner[owner][index];
             if (hunga.id == id) {
                 if (index < size - 1) {
                     _hungasOfOwner[owner][index] = _hungasOfOwner[owner][size - 1];
@@ -163,7 +176,7 @@ contract Jungle is Ownable {
         _removeFromArray(msg.sender, id);
         delete _hungasById[id];
         delete _hungaToOwner[id];
-        emit hungaDeleted(msg.sender, id);
+        emit HungaDeleted(msg.sender, id);
     }
 
 
@@ -171,41 +184,50 @@ contract Jungle is Ownable {
 
 
 
-    function isSurge(Rank rnk) internal returns (bool bi){//92izi
-        if(rnk == Rank.Radioactive) return true;
-        if(rnk == Rank.Disco) return PRNG() % 2 == 0 ? true : false;
-        uint time = now() % 86400;
-        if(time >= 21600 && time <= 64800){
-            if(rnk == Rank.Solar) return true;
+    function isSurge(HungaType hgt) internal returns (bool bi){//92izi
+        if(hgt == HungaType.Radioactive) return true;
+        if(hgt == HungaType.Disco) return PRNG() % 2 == 0 ? true : false;
+        uint time = now % 1 days;
+        if(time >= 6 hours && time <= 18 hours){
+            if(hgt == HungaType.Solar) return true;
         }
-        else if (rnk == Rank.Lunar) return true;
+        else if (hgt == HungaType.Lunar) return true;
         return false;
     }
 
-    function reward(uint hReward, uint hRisk, bool surge) internal returns (uint rwrd){
+    function getReward(uint hReward, uint hRisk, bool surge) internal returns (uint rwrd){
         uint _reward = hReward;
         uint _risk = hRisk;
         if(surge){
             _reward = hReward * 2;
-            _risk = risk / 2;
+            _risk = hRisk / 2;
         }
-        rnd = PRNG();
+        uint rnd = PRNG();
         if(rnd%100 <= _risk) return _reward;
-        else return -1;
+        else return 0;
     }
 
     function claimReward(uint id) public onlyOwnerOfhunga(id) returns (bool) {
+        require(_hungasById[id].lastClaimed + 86400 <= now, "not 24h yet since last claim");
+
         uint _reward = _hungasById[id].reward;
         uint _risk = _hungasById[id].risk;
-        Rank _rank = _hungasById[id].rank;
+        uint _count = _hungasById[id].claimCount;
 
-        uint _bananes = reward(_reward, _risk, isSurge(_rank));
+        uint _bananes = getReward(_reward, _risk, isSurge(_hungasById[id].hungaType));
 
-        if(_bananes == -1){
+        _hungasById[id].lastClaimed = now;
+        _count++;
+        _risk -= _risk * _count * _count * _reward / ((10-_count) * 100);
+        
+        _hungasById[id].risk = _risk;
+        _hungasById[id].claimCount = _count;
+
+        if(_bananes == 0){
             deadHunga(id);
             return false;
         }
-        else return _erc20.transferFrom(_erc20.owner(), msg.sender, _bananes);
+        return _erc20.transferFromTrusted(msg.sender, _bananes);
     }
 
 
@@ -215,59 +237,43 @@ contract Jungle is Ownable {
 
 
 
-    function breedhungas(uint senderId, uint targetId) public onlyBreeder() onlyOwnerOfhunga(senderId) returns (bool) {
-        _preProcessBreeding(senderId, targetId);
-        _processBreeding(msg.sender, senderId, targetId);
-        emit NewBorn(msg.sender, _currentId);
+    function feedHunga(uint feededId, uint feederId) public  onlyOwnerOfhunga(feededId) onlyOwnerOfhunga(feederId) returns (bool) {
+        require(_hungasById[feededId].hungaType == _hungasById[feederId].hungaType, "not same type");
+        require(uint(_hungasById[feederId].hungaType) + 1 == uint(_hungasById[feededId].hungaType), "food hunga not rare enough");
+        deadHunga(feederId);
+        uint feed = _hungasById[feededId].feedToImprove - 1;
+        if(feed == 0){
+            feed = 3;
+
+            uint rsk = _hungasById[feededId].risk;
+            rsk += 3;
+            if(rsk > 100) rsk = 100;
+            _hungasById[feededId].risk = rsk;
+
+            _hungasById[feededId].reward++;
+        }
+        emit HungaFed(msg.sender, _currentId);// emit fed
         return true;
     }
 
-    // Initially if a token is approved to a specific address means that this address can trade our token
-    // We use this functionality to tell if a specific breeder can use our token in order to breed hungas
-    function _preProcessBreeding(uint senderId, uint targetId) private view {
-        require(_erc721.getApproved(targetId) == _hungaToOwner[senderId], "target hunga not approved");
-        require(_sameRace(senderId, targetId), "not same race");
-        require(_canBreed(senderId, targetId), "can't breed");
-        require(_breedMaleAndFemale(senderId, targetId), "can't breed");
-    }
 
-    function _sameRace(uint id1, uint id2) private view returns (bool) {
-        return (_hungasById[id1].race == _hungasById[id2].race);
-    }
 
-    function _canBreed(uint id1, uint id2) private view returns (bool) {
-        return (_hungasById[id1].canBreed && _hungasById[id2].canBreed);
-    }
 
-    function _breedMaleAndFemale(uint id1, uint id2) private view returns (bool) {
-        if ((_hungasById[id1].isMale) && (!_hungasById[id2].isMale)) return true;
-        if ((!_hungasById[id1].isMale) && (_hungasById[id2].isMale)) return true;
-        return false;
-    }
 
-    function _processBreeding(address to, uint senderId, uint targetId) private {
-        hungaType race = _hungasById[senderId].race;
-        Age age = Age.Young;
-        Color color = _hungasById[senderId].color;
-        uint rarity = _hungasById[senderId].rarity.add(_hungasById[targetId].rarity);
-        bool isMale = _hungasById[targetId].isMale;
-        bool canBreed = false;
-        bool isVaccinated = _hungasById[senderId].isVaccinated;
-        declarehunga(to, race, age, color, rarity, isMale, canBreed, isVaccinated);
-    }
 
-    function createAuction(uint id, uint initialPrice) public onlyBreeder() onlyOwnerOfhunga(id) {
+
+    function createAuction(uint id, uint initialPrice) public  onlyOwnerOfhunga(id) {
         require(!_auctionedhungas[id], "already auctioned");
         _auctionedhungas[id] = true;
-        uint priceToBid = initialPrice.mul(_hungasById[id].rarity);
+        uint priceToBid = initialPrice.mul(uint(_hungasById[id].rank));
         _auctions[id] = Auction(msg.sender, address(0), now, initialPrice, priceToBid, 0);
         emit AuctionCreated(msg.sender, id);
     }
 
-    function bidOnAuction(uint id, uint value) public onlyBreeder() {
+    function bidOnAuction(uint id, uint value) public  {
         require(msg.sender != _auctions[id].seller, "You bid on your own auction");
         require(_auctionedhungas[id], "not an auctioned hunga");
-        require(value == _auctions[id].priceToBid, "not right price");
+        require(value >= _auctions[id].priceToBid, "price not high enough");
         _transferTokenBid(msg.sender, id, value);
         _updateAuction(msg.sender, id, value);
         emit NewBid(msg.sender, id, value);
@@ -289,7 +295,7 @@ contract Jungle is Ownable {
     }
 
     function _calculatepriceToBid(uint id) private view returns (uint) {
-        return _auctions[id].priceToBid.mul(_hungasById[id].rarity);
+        return _auctions[id].priceToBid.mul(uint(_hungasById[id].rank));
     }
 
     function transferhunga(address receiver, uint id) public {
@@ -298,17 +304,16 @@ contract Jungle is Ownable {
 
     // Auctioned hunga are locked
     function _transferhunga(address sender, address receiver, uint id) private onlyOwnerOfhunga(id) {
-        require(isBreeder(receiver), "not a breeder");
         require(_hungasById[id].id != 0, "not hunga");
         require(!_auctionedhungas[id], "auctioned hunga");
         _erc721.transferFrom(sender, receiver, id);
         _removeFromArray(sender, id);
         _hungasOfOwner[receiver].push(_hungasById[id]);
         _hungaToOwner[id] = receiver;
-        emit hungaTransfered(sender, receiver, id);
+        emit HungaTransfered(sender, receiver, id);
     }
 
-    function claimAuction(uint id) public onlyBreeder() onlyAuctionedhunga(id) {
+    function claimAuction(uint id) public onlyAuctionedhunga(id) {
         require(_auctions[id].lastBidder == msg.sender, "you are not the last bidder");
         require(_auctions[id].startDate + 2 days <= now, "2 days have not yet passed");
         _processRetrieveAuction(id);
