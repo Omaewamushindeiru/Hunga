@@ -8,6 +8,7 @@ contract Crowdsale is ReentrancyGuard {
     using SafeMath for uint256;
 
     event TokensPurchased(address indexed purchaser, address indexed beneficiary, uint value, uint amount);
+    event CapRaised(uint cap, uint weiRaised);
 
     ERC20 private _token;
 
@@ -22,7 +23,7 @@ contract Crowdsale is ReentrancyGuard {
     constructor (uint rate, uint minSpent, uint cap, ERC20 token) public {
         require(rate > 0, "rate is negative");
         require(address(token) != address(0), "address 0x0");
-        require(_cap > 0, "cap is negative");
+        require(cap > 0, "cap is negative");
 
         _cap = cap;
         _owner = msg.sender;
@@ -69,11 +70,17 @@ contract Crowdsale is ReentrancyGuard {
         _;
     }
 
+    function raiseCap (uint amount) public onlyOwner(){
+        require(amount > 0, "amount negative");
+        _cap += amount;
+        emit CapRaised(_cap, _weiRaised);
+    }
+
 
     function buyTokens(address beneficiary) public payable {
         uint weiAmount = msg.value;
         _preValidatePurchase(beneficiary, weiAmount);
-        uint tokens = _getTokenAmount(beneficiary, weiAmount);
+        uint tokens = _getTokenAmount(weiAmount);
         _weiRaised = _weiRaised.add(weiAmount);
         _processPurchase(beneficiary, tokens);
         emit TokensPurchased(msg.sender, beneficiary, weiAmount, tokens);
@@ -95,7 +102,7 @@ contract Crowdsale is ReentrancyGuard {
         _deliverTokens(beneficiary, tokenAmount);
     }
 
-    function _getTokenAmount(address _address, uint weiAmount) internal view returns (uint) {
+    function _getTokenAmount(uint weiAmount) internal view returns (uint) {
         return weiAmount.mul(_rate);
     }
 

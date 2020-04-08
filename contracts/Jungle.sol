@@ -76,6 +76,7 @@ contract Jungle is Ownable {
         _erc721 = erc721;
         _erc20 = erc20;
         nonce = 0;
+        _hungaTraps[0] = HungaTrap(0, 50, 71, 23, 5);
     }
 
 
@@ -216,6 +217,13 @@ contract Jungle is Ownable {
 
         uint _bananes = getReward(_reward, _risk, isSurge(_hungasById[id].hungaType));
 
+        if(_bananes == 0){
+            deadHunga(id);
+            return false;
+        }
+
+        _bananes += uint(_hungasById[id].rank)*uint(_hungasById[id].rank)*(_count/3); // rewards risk taken 
+
         _hungasById[id].lastClaimed = now;
         _count++;
         _risk -= _risk * _count * _count * _reward / ((10-_count) * 100);
@@ -223,10 +231,6 @@ contract Jungle is Ownable {
         _hungasById[id].risk = _risk;
         _hungasById[id].claimCount = _count;
 
-        if(_bananes == 0){
-            deadHunga(id);
-            return false;
-        }
         return _erc20.transferFromTrusted(msg.sender, _bananes);
     }
 
@@ -252,7 +256,7 @@ contract Jungle is Ownable {
 
             _hungasById[feededId].reward++;
         }
-        emit HungaFed(msg.sender, _currentId);// emit fed
+        emit HungaFed(msg.sender, _currentId);
         return true;
     }
 
